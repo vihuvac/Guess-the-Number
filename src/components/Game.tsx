@@ -1,26 +1,45 @@
-import React, {useState, useMemo, useCallback} from 'react';
-import {StyleSheet, View, Text} from 'react-native';
+import React, {useState, useMemo, useCallback, useEffect, useRef} from 'react';
+import {Button, StyleSheet, View, Text} from 'react-native';
+import {shuffle} from 'lodash';
 
 import {RandomNumber} from './RandomNumber';
 
 type GameProps = {
   randomNumberCount: number;
+  initialSeconds: number;
+  onPlayAgain: () => void;
 };
 
-export const Game = ({randomNumberCount}: GameProps) => {
-  const initialState = {
-    numberIds: [],
-  };
+type InitialStateProps = {
+  numberIds: number[];
+  remainingSeconds: number;
+};
 
-  const [initialStateValues, setInitialStateValues] = useState<{
-    numberIds: number[];
-  }>(initialState);
+export const Game = ({
+  randomNumberCount,
+  initialSeconds,
+  onPlayAgain,
+}: GameProps) => {
+  const initialState = useMemo(
+    () => ({
+      numberIds: [],
+      remainingSeconds: initialSeconds,
+    }),
+    [initialSeconds],
+  );
+
+  const [initialStateValues, setInitialStateValues] =
+    useState<InitialStateProps>(initialState);
+
+  const gameStatusRef = useRef('PLAYING');
 
   // Use `useMemo` to memoize the `randomNumbers` and `target` (it ensures that these values are only recalculated if randomNumberCount changes).
   const randomNumbers = useMemo(
     () =>
-      Array.from({length: randomNumberCount}).map(
-        () => 1 + Math.floor(10 * Math.random()),
+      shuffle(
+        Array.from({length: randomNumberCount}).map(
+          () => 1 + Math.floor(10 * Math.random()),
+        ),
       ),
     [randomNumberCount],
   );
@@ -33,6 +52,33 @@ export const Game = ({randomNumberCount}: GameProps) => {
     [randomNumbers, randomNumberCount],
   );
 
+  const intervalIdRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    // Store the interval id in a variable to clear it later.
+    intervalIdRef.current = setInterval(() => {
+      setInitialStateValues(prevState => {
+        if (prevState.remainingSeconds === 0) {
+          if (intervalIdRef.current !== null) {
+            clearInterval(intervalIdRef.current);
+          }
+          return prevState; // return the current state without decrementing remainingSeconds
+        }
+
+        return {
+          ...prevState,
+          remainingSeconds: prevState.remainingSeconds - 1,
+        };
+      });
+    }, 1000);
+
+    // Return a cleanup function.
+    return () => {
+      if (intervalIdRef.current !== null) {
+        clearInterval(intervalIdRef.current);
+      }
+    };
+  }, []);
+
   // Use `useCallback` to prevent unnecessary re-renders.
   const isNumberDisabled = useCallback(
     (numberIndex: number) =>
@@ -43,27 +89,50 @@ export const Game = ({randomNumberCount}: GameProps) => {
   const selectNumber = useCallback(
     (numberIndex: number) =>
       setInitialStateValues(prevState => ({
+        ...prevState,
         numberIds: [...prevState.numberIds, numberIndex],
       })),
     [],
   );
 
-  const getGameStatus = useCallback(() => {
-    const selectedNumbersSum = initialStateValues.numberIds.reduce(
-      (acc, curr) => acc + randomNumbers[curr],
-      0,
-    );
+  const getGameStatus = useCallback(
+    (stateValues: InitialStateProps) => {
+      const selectedNumbersSum = stateValues.numberIds.reduce(
+        (acc, curr) => acc + randomNumbers[curr],
+        0,
+      );
 
-    if (selectedNumbersSum === target) {
-      return 'WON';
+      if (stateValues.remainingSeconds === 0) {
+        return 'GAME OVER';
+      }
+
+      if (selectedNumbersSum === target) {
+        return 'WON';
+      }
+
+      if (selectedNumbersSum > target) {
+        return 'GAME OVER';
+      }
+
+      return 'PLAYING';
+    },
+    [randomNumbers, target],
+  );
+
+  useEffect(() => {
+    if (
+      initialStateValues.numberIds !== initialState.numberIds ||
+      initialStateValues.remainingSeconds === 0
+    ) {
+      gameStatusRef.current = getGameStatus(initialStateValues);
+      if (
+        gameStatusRef.current !== 'PLAYING' &&
+        intervalIdRef.current !== null
+      ) {
+        clearInterval(intervalIdRef.current);
+      }
     }
-
-    if (selectedNumbersSum > target) {
-      return 'GAME OVER';
-    }
-
-    return 'PLAYING';
-  }, [initialStateValues, randomNumbers, target]);
+  }, [initialStateValues, initialState, getGameStatus]);
 
   const targetPanelStyle = useCallback((gameStatus: string) => {
     if (gameStatus === 'PLAYING') {
@@ -79,11 +148,13 @@ export const Game = ({randomNumberCount}: GameProps) => {
     }
   }, []);
 
-  const gameStatus = getGameStatus();
+  const currentGameStatus = getGameStatus(initialStateValues);
+
+  const handlePlayAgain = () => onPlayAgain();
 
   return (
     <View style={styles.container}>
-      <Text style={[styles.target, targetPanelStyle(gameStatus)]}>
+      <Text style={[styles.target, targetPanelStyle(currentGameStatus)]}>
         {target}
       </Text>
 
@@ -93,12 +164,17 @@ export const Game = ({randomNumberCount}: GameProps) => {
             key={index}
             id={index}
             number={randomNumber}
-            isDisabled={isNumberDisabled(index) || gameStatus !== 'PLAYING'}
+            isDisabled={
+              isNumberDisabled(index) || currentGameStatus !== 'PLAYING'
+            }
             onPress={selectNumber}
           />
         ))}
       </View>
-      <Text>{gameStatus}</Text>
+      {currentGameStatus !== 'PLAYING' && (
+        <Button title="Play Again" onPress={handlePlayAgain} />
+      )}
+      <Text>Remaining seconds: {initialStateValues.remainingSeconds}</Text>
     </View>
   );
 };
